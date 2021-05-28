@@ -28,9 +28,34 @@ std::byte operator""_B(unsigned long long c)
   return static_cast<byte>(c);
 }
 
-template<typename T,
-         typename G,
-         bool InitialSuspend>  // #A Control the initial suspend
+namespace coro_iterator {
+    template<typename PT>
+    struct iterator {
+        using coro_handle = std::coroutine_handle<PT>;
+
+        coro_handle mCoroHdl{};
+
+        using RetType = decltype(mCoroHdl.promise().mValue);
+
+        void resume() { mCoroHdl.resume(); }
+
+        iterator() = default;
+
+        iterator(coro_handle hco)
+                : mCoroHdl{hco}
+        {
+            resume();
+        }
+
+        void operator++() { resume(); }
+
+        bool           operator==(const iterator&) const { return mCoroHdl.done(); }
+        const RetType& operator*() const { return mCoroHdl.promise().mValue; }
+    };
+}  // namespace coro_iterator
+
+
+template<typename T, typename G, bool InitialSuspend>  // #A Control the initial suspend
 struct promise_type_base {
   T mValue;
 
@@ -54,37 +79,10 @@ struct promise_type_base {
   void                return_void() {}
 };
 
-namespace coro_iterator {
-  template<typename PT>
-  struct iterator {
-    using coro_handle = std::coroutine_handle<PT>;
-
-    coro_handle mCoroHdl{};
-
-    using RetType = decltype(mCoroHdl.promise().mValue);
-
-    void resume() { mCoroHdl.resume(); }
-
-    iterator() = default;
-
-    iterator(coro_handle hco)
-    : mCoroHdl{hco}
-    {
-      resume();
-    }
-
-    void operator++() { resume(); }
-
-    bool           operator==(const iterator&) const { return mCoroHdl.done(); }
-    const RetType& operator*() const { return mCoroHdl.promise().mValue; }
-  };
-}  // namespace coro_iterator
 
 template<typename T, bool IntialSuspend = true>  // #A New NTTP
 struct generator {
-  using promise_type =
-    promise_type_base<T, generator, IntialSuspend>;  // #B Forward IntialSuspend
-
+  using promise_type = promise_type_base<T, generator, IntialSuspend>;  // #B Forward IntialSuspend
   using PromiseTypeHandle = std::coroutine_handle<promise_type>;
   using iterator          = coro_iterator::iterator<promise_type>;
 
@@ -92,8 +90,7 @@ struct generator {
   iterator end() { return {}; }
 
   generator(generator const&) = delete;
-  generator(generator&& rhs)
-  : mCoroHdl{std::exchange(rhs.mCoroHdl, nullptr)}
+  generator(generator&& rhs) : mCoroHdl{std::exchange(rhs.mCoroHdl, nullptr)}
   {}
 
   ~generator()
@@ -112,13 +109,13 @@ struct generator {
 
 private:
   friend promise_type;  // #D As the default ctor is private we G needs to be a friend
-  explicit generator(promise_type* p)
-  : mCoroHdl(PromiseTypeHandle::from_promise(*p))
+  explicit generator(promise_type* p) : mCoroHdl(PromiseTypeHandle::from_promise(*p))
   {}
 
 protected:
   PromiseTypeHandle mCoroHdl;
 };
+
 
 class DataStreamReader {  // #A Awaitable
 public:
@@ -129,16 +126,13 @@ public:
 
   struct Awaiter {  // #C Awaiter implementation
     Awaiter& operator=(Awaiter&&) noexcept = delete;
-    Awaiter(DataStreamReader& event) noexcept
-    : mEvent{event}
+    Awaiter(DataStreamReader& event) noexcept : mEvent{event}
     {
       mEvent.mAwaiter = this;
     }
 
     bool await_ready() const noexcept { return mEvent.mData.has_value(); }
-
-    void await_suspend(std::coroutine_handle<> coroHdl) noexcept
-    {
+    void await_suspend(std::coroutine_handle<> coroHdl) noexcept {
       mCoroHdl = coroHdl;  // #D Stash the handle of the awaiting coroutine.
     }
 
@@ -156,12 +150,16 @@ public:
   };
 
   // #E Make DataStreamReader awaitable
-  auto operator co_await() noexcept { return Awaiter{*this}; }
+  auto operator co_await() noexcept {
+      return Awaiter{*this};
+  }
 
   void set(byte b)
   {
     mData.emplace(b);
-    if(mAwaiter) { mAwaiter->resume(); }
+    if(mAwaiter) {
+        mAwaiter->resume();
+    }
   }
 
 private:
@@ -170,7 +168,9 @@ private:
   std::optional<byte> mData{};
 };
 
+
 using FSM = generator<std::string, false>;
+
 
 static const byte ESC{'H'};
 static const byte SOF{0x10};
@@ -178,7 +178,7 @@ static const byte SOF{0x10};
 FSM Parse(DataStreamReader& stream)  // #A Pass the stream a parameter
 {
   while(true) {
-    byte        b = co_await stream;  // #B Await on the stream
+    byte b = co_await stream;  // #B Await on the stream
     std::string frame{};
 
     if(ESC == b) {
@@ -226,25 +226,24 @@ int main()
 {
   std::vector<byte> fakeBytes1{
     0x70_B, ESC, SOF, ESC, 'H'_B, 'e'_B, 'l'_B, 'l'_B, 'o'_B, ESC, SOF, 0x7_B, ESC, SOF};
-
   std::vector<byte> fakeBytes2{'W'_B, 'o'_B, 'r'_B, 'l'_B, 'd'_B, ESC, SOF, 0x99_B};
-
-  auto stream1 = sender(std::move(fakeBytes1));
 
   DataStreamReader dr{};  // #A Create a DataStreamReader Awaitable
   auto p = Parse(dr);     // #B Create the Parse coroutine and pass the DataStreamReader
 
+  auto stream1 = sender(std::move(fakeBytes1));
   for(const auto& b : stream1) {
     dr.set(b);  // #C Send the new byte to the waiting DataStreamReader
-
-    if(const auto& res = p(); res.length()) { HandleFrame(res); }
+    if(const auto& res = p(); res.length()) {
+        HandleFrame(res);
+    }
   }
 
   auto stream2 = sender(std::move(fakeBytes2));  // #D Simulate a second network stream
-
   for(const auto& b : stream2) {
     dr.set(b);  // #E We still use the former dr and p and feed it with new bytes
-
-    if(const auto& res = p(); res.length()) { HandleFrame(res); }
+    if(const auto& res = p(); res.length()) {
+        HandleFrame(res);
+    }
   }
 }

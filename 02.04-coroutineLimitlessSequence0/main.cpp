@@ -31,7 +31,6 @@ struct promise_type_base {
   auto yield_value(T value)  // #B Invoked by co_yield or co_return
   {
     mValue = std::move(value);  // #C Store the yielded value for access outside the coroutine
-
     return std::suspend_always{};  // #D Suspend the coroutine here
   }
 
@@ -106,8 +105,7 @@ using IntGenerator = generator<int>;
 
 void UseCounterValue(int i);
 
-IntGenerator  // #A Returning a coroutine object
-counter(int start, int end)
+IntGenerator counter(int start, int end)
 {
   while(start < end) {
     co_yield start;  // #B Yielding a value and giving control back to the  caller
